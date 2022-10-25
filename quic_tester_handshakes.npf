@@ -49,6 +49,7 @@ sysctl -w net.core.somaxconn=1000000
 sysctl -w net.ipv4.tcp_max_syn_backlog=3240000
 sysctl -w net.ipv4.tcp_fin_timeout=5
 sysctl -w net.ipv4.tcp_max_orphans=1000000
+sysctl -w net.ipv4.tcp_tw_reuse=1
 
 %init@server sudo=true
 //removing irqbalance, core 2 will handles every interrupt
@@ -60,6 +61,7 @@ sysctl -w net.core.somaxconn=1000000
 sysctl -w net.ipv4.tcp_max_syn_backlog=3240000
 sysctl -w net.ipv4.tcp_fin_timeout=5
 sysctl -w net.ipv4.tcp_max_orphans=1000000
+sysctl -w net.ipv4.tcp_tw_reuse=1
 
 %config
 timeout=60
@@ -75,7 +77,7 @@ sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
 cd /home/tbarbette/workspace/wrk-quic/src
 DST=10.100.0.2
-sudo taskset -c 0-8 ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
+sudo taskset -c 0-$((CLIENT_THREADS + 1 )) ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
 echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" | awk '{print $2}')
 
 
@@ -107,7 +109,7 @@ echo "RESULT-HANDSHAKES "$(cat out | grep 'Result' | awk '{print $2}')
 sudo env PATH=$PATH taskset -c 2 cli_tests_server -c $cert -k $key 10.100.0.2 8443 -B -y aes128gcmsha256
 
 %picotls:script@client sudo=true delay=5
-sudo env PATH=$PATH cli_tests --client 10 10 10.100.0.2 -B 8443 -y aes128gcmsha256 | tee out | tee /home/nikita/picotls_logs
+sudo env PATH=$PATH taskset -c 0-$CLIENT_THREADS cli_tests --client $H $CLIENT_THREADS 10.100.0.2 -B 8443 -y aes128gcmsha256 | tee out | tee /home/nikita/picotls_logs
 echo "RESULT-HANDSHAKES "$(sudo cat out | grep -ioE '[0-9]+' | awk '{s+=$1} END {print s / 10}')
 
 
