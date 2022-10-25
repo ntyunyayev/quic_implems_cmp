@@ -106,7 +106,7 @@ sudo env PATH=$PATH taskset -c 0-7 secnetperf -cipher:1 -TestName:HPS -target:10
 echo "RESULT-HANDSHAKES "$(cat out | grep 'Result' | awk '{print $2}')
 
 %picotls:script@server sudo=true
-sudo env PATH=$PATH taskset -c 2 cli_tests_server -c $cert -k $key 10.100.0.2 8443 -B -y aes128gcmsha256
+sudo env PATH=$PATH taskset -c 2 cli_tests --server $CLIENT_THREADS -c $cert -k $key 10.100.0.2 8443 -B -y aes128gcmsha256
 
 %picotls:script@client sudo=true delay=5
 sudo env PATH=$PATH taskset -c 0-$CLIENT_THREADS cli_tests --client $H $CLIENT_THREADS 10.100.0.2 -B 8443 -y aes128gcmsha256 | tee out | tee /home/nikita/picotls_logs
