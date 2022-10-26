@@ -145,6 +145,9 @@ sudo env PATH=$PATH taskset -c $NB_CORES cli 10.100.0.2 -B 8443 -y aes128gcmsha2
 sleep 20
 sudo kill $(pidof cli)
 
-
-
-
+//--------------
+// nginx + WRK
+//--------------
+%include npf.d/nginx.npf
+%nginx:import@server nginx
+%nginx:import@client wrk2 delay=5

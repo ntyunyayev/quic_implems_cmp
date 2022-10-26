@@ -1,0 +1,16 @@
+%variables
+nginx:NGINX_ROOT=/tmp/
+nginx:GEN_RATE=-1
+nginx:NGINX_NWORKER=1
+nginx:NGINX_PORT=4443
+nginx:HTTP_PORT=4443
+nginx:WRK_HOST=10.100.0.2
+nginx:AFF=0
+nginx:NGINX_IRQ_AFFINITY=0
+nginx:KEEPALIVE=0
+%nginx:script@server autokill=false
+if [ ${FSIZE} -eq 0 ] ; then
+    echo "" > ${NGINX_ROOT}/bin-${FSIZE}K
+else
+    fallocate -l ${FSIZE}K ${NGINX_ROOT}/bin-${FSIZE}K 
+fi

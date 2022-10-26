@@ -21,20 +21,11 @@ AFF=2
 //PARRALEL=[1*64]
 //THREADS=[1*64]
 
-nginx:NGINX_ROOT=./nginx/
-nginx:GEN_RATE=-1
-nginx:NGINX_NWORKER=1
-nginx:NGINX_PORT=4443
-nginx:HTTP_PORT=4443
-nginx:WRK_HOST=10.100.0.2
-nginx:AFF=0
-
 %late_variables
 FILE_PATH=EXPAND(bin-${FSIZE}K)
 GEN_CONCURRENT=EXPAND($CLIENT_PARALLEL)
 GEN_THREADS=EXPAND($CLIENT_THREADS)
 
-%late_variables
 key=${NPF_ROOT}/server.key
 cert=${NPF_ROOT}/server.cert
 RUNTIME=10000
@@ -112,8 +103,6 @@ sudo env PATH=$PATH taskset -c 2 cli_tests --server $CLIENT_THREADS -c $cert -k 
 sudo env PATH=$PATH taskset -c 0-$CLIENT_THREADS cli_tests --client $H $CLIENT_THREADS 10.100.0.2 -B 8443 -y aes128gcmsha256 | tee out | tee /home/nikita/picotls_logs
 echo "RESULT-HANDSHAKES "$(sudo cat out | grep -ioE '[0-9]+' | awk '{s+=$1} END {print s / 10}')
 
-
+%include npf.d/nginx.npf
 %nginx:import@server nginx
 %nginx:import@client wrk2 delay=5
-%nginx:script@server autokill=false
-dd if=/dev/urandom of=${NGINX_ROOT}/bin-${FSIZE}K bs=1K count=$FSIZE
