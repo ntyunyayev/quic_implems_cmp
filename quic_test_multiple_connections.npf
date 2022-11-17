@@ -1,0 +1,135 @@
+%info
+A test script to compare performance of QUIC stacks
+
+This file is intended to be run with NPF
+
+%variables
+NB_CLIENTS=[1*8]
+CORES_USED={2,4}
+
+%late_variables
+key=  ${NPF_ROOT}/server.key
+cert= ${NPF_ROOT}/server.cert
+DOWNLOAD_SIZE=10000000000
+
+%config
+timeout=600
+n_runs=3
+
+%init@client
+//enabling IRQ balance 
+echo 8 | sudo tee /sys/bus/pci/devices/0000\:18\:00.0/sriov_numvfs
+sudo ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
+
+%init@server
+//removing irqbalance, core 2 will handles every interrupt
+sudo ethtool -L ens1f0 combined 1 && sudo systemctl stop irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 2 ens1f0
+
+
+
+//--------------
+// msquic
+//--------------
+
+%msquic:script@server sudo=true
+sudo env PATH=$PATH taskset -c $CORES_USED secnetperf -cipher:1 -bind:10.100.0.2
+
+%msquic:script@client sudo=true delay=3
+START="$(date +%s.%3N)"
+for i in {1..$NB_CLIENTS}
+do
+   (sudo env PATH=$PATH secnetperf -cipher:1 -TestName:throughput -target:10.100.0.2 -p 4433 -download:$DOWNLOAD_SIZE) &
+done
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+echo "$DOWNLOAD_SIZE * 8 * $NB_CLIENTS / 1000000000"
+RES=$(echo "$DOWNLOAD_SIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+
+//--------------
+// quicly
+//--------------
+
+//working
+%quicly:script@server sudo=true
+sudo env PATH=$PATH taskset -c $CORES_USED cli_quicly -c $cert -k $key 10.100.0.2 4567 -b 20000000000 -G
+
+%quicly:script@client sudo=true delay=3
+START="$(date +%s.%3N)"
+for i in {1..$NB_CLIENTS}
+do
+   (sudo env PATH=$PATH cli_quicly 10.100.0.2 4567 -O -b 20000000000 -G -p /$DOWNLOAD_SIZE) &
+done
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$DOWNLOAD_SIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+
+//--------------
+// quiche
+//--------------
+
+//working
+%quiche:script@server sudo=true
+sudo env PATH=$PATH taskset -c $CORES_USED http3-server -p 4445 -k $key -c $cert
+
+%quiche:script@client sudo=true delay=10
+for i in {1..$NB_CLIENTS}
+do
+(sudo env PATH=$PATH http3-client -G 100000000 -X keys.log 10.100.0.2 4445 | tee ~/out_test$i.quiche | grep -ioE '[0-9.]+ mbps' | awk '{print $1 /1000}' | tee ~/out$i.quiche) &
+done
+wait
+END="$(date -u +%s)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$DOWNLOAD_SIZE * 8 /1000000000 / $NB_CLIENTS" | BC -l)
+echo "RESULT-GOODPUT "$RES
+
+//--------------
+// picoquic
+//--------------
+
+%picoquic:script@server sudo=true
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $CORES_USED dpdk_picoquicdemo --nodpdk -c $cert -k $key -B 1000000000 -p 4443
+
+%picoquic:script@client sudo=true delay=3
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+START="$(date +%s.%3N)"
+for i in $( eval echo {1..$NB_CLIENTS} )
+do
+(sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D 10.100.0.2 4443 /$DOWNLOAD_SIZE) &
+done
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$DOWNLOAD_SIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+
+
+
+//--------------
+// picoquic-dpdk
+//--------------
+
+%picoquic_dpdk:script@server sudo=true
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 2-3 -a 0000:18:00.0 -- -c $cert -k $key -p 4443
+
+%picoquic_dpdk:script@client sudo=true delay=3 
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+START="$(date +%s.%3N)"
+sudo LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./dpdk_picoquicdemo --dpdk -l 0-5 -a 0000:18:00.2 -a 0000:18:00.3 -a 0000:18:00.4 -a 0000:18:00.5 -a 0000:18:00.6 -- -X -D -A 50:6b:4b:f3:7c:70 -N 5 10.100.0.2 4443 /20000000000
+for i in $( eval echo {1..$NB_CLIENTS} )
+do
+(sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D 10.100.0.2 4443 /$DOWNLOAD_SIZE) &
+done
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$DOWNLOAD_SIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+

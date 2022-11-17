@@ -5,8 +5,7 @@ This file is intended to be run with NPF
 
 %variables
 
-
-FSIZE=0
+FSIZE={0,1000,10000,100000,1000000}
 SERVER=picoquic
 CLIENT=picoquic
 RP=10
@@ -31,9 +30,9 @@ cert=${NPF_ROOT}/server.cert
 RUNTIME=10000
 
 %init@client sudo=true
-//enabling IRQ balance + adding entry into ARP table
-sudo arp -s  10.100.0.2 50:6b:4b:f3:7c:70
+//enabling IRQ balance
 ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
+sudo arp -s  10.100.0.2 50:6b:4b:f3:7c:70
 sysctl -w net.ipv4.neigh.default.gc_thresh1=2048
 sysctl -w net.ipv4.neigh.default.gc_thresh2=8192
 sysctl -w net.ipv4.neigh.default.gc_thresh3=65536
@@ -69,7 +68,7 @@ sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
 cd /home/tbarbette/workspace/wrk-quic/src
 DST=10.100.0.2
-sudo taskset -c 0-$((CLIENT_THREADS + 1 )) ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
+sudo taskset -c 8-15 ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
 echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" | awk '{print $2}')
 
 
@@ -82,34 +81,5 @@ sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c 2 dpdk_picoquicd
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
 cd /home/tbarbette/workspace/wrk-quic/src
 DST=10.100.0.2
-sudo taskset -c 0-8 ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
+sudo taskset -c 8-15 ../wrk -a -R 0 --timeout $H -q -t 15 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
 echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" | awk '{print $2}')
-
-
-
-
-%msquic:script@server sudo=true
-sudo env PATH=$PATH taskset -c 2 secnetperf -cipher:1 -bind:10.100.0.2
-
-%msquic:script@client sudo=true delay=3
-sudo env PATH=$PATH taskset -c 0-7 secnetperf -cipher:1 -TestName:HPS -target:10.100.0.2 -p 4433 -runtime:$RUNTIME -parralel:16 -threads:8 | tee out
-echo "RESULT-HANDSHAKES "$(cat out | grep 'Result' | awk '{print $2}')
-
-%picotls:script@server sudo=true
-sudo env PATH=$PATH taskset -c 2 cli_tests --server $CLIENT_THREADS -c $cert -k $key 10.100.0.2 8443 -B -y aes128gcmsha256
-
-%picotls:script@client sudo=true delay=5
-sudo env PATH=$PATH taskset -c 0-$CLIENT_THREADS cli_tests --client $H $CLIENT_THREADS 10.100.0.2 -B 8443 -y aes128gcmsha256 | tee out | tee /home/nikita/picotls_logs
-echo "RESULT-HANDSHAKES "$(sudo cat out | grep -ioE '[0-9]+' | awk '{s+=$1} END {print s / 10}')
-
-%include npf.d/nginx.npf
-%nginx:import@server nginx
-%nginx:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:4443/bin-0K | tee out.txt | grep 'Requests' | awk '{print $2}')
-
-
-%h2o:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:8081/0index.html | tee out.txt | grep 'Requests' | awk '{print $2}')
-
-%h2o:script@server sudo=true
-sudo env PATH=$PATH taskset -c 2 h2o -c ${NPF_ROOT}h2o_conf.conf

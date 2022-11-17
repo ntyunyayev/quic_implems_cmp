@@ -6,7 +6,7 @@ This file is intended to be run with NPF
 %variables
 
 
-FSIZE=0
+FSIZE=50000000
 SERVER=picoquic
 CLIENT=picoquic
 RP=10
@@ -31,8 +31,7 @@ cert=${NPF_ROOT}/server.cert
 RUNTIME=10000
 
 %init@client sudo=true
-//enabling IRQ balance + adding entry into ARP table
-sudo arp -s  10.100.0.2 50:6b:4b:f3:7c:70
+//enabling IRQ balance
 ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
 sysctl -w net.ipv4.neigh.default.gc_thresh1=2048
 sysctl -w net.ipv4.neigh.default.gc_thresh2=8192
@@ -63,7 +62,7 @@ n_runs=5
 %picoquic_dpdk:script@server sudo=true
 sudo ethtool -L ens1f0 combined 1 && sudo systemctl stop irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 2 ens1f0
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
-sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-1 -a 0000:18:00.0 -- -T /dev/null -c $cert -k $key -p 4443 2>&1 | tee ~/logs.handshakes 
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-1 -a 0000:18:00.0 -- -c $cert -k $key -p 4443 2>&1 | tee ~/logs.handshakes 
 
 %picoquic_dpdk:script@client sudo=true delay=3
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
@@ -76,7 +75,7 @@ echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" 
 
 %picoquic:script@server sudo=true
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
-sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c 2 dpdk_picoquicdemo --nodpdk -T /dev/null -c $cert -k $key -p 4443
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c 2 dpdk_picoquicdemo --nodpdk -c $cert -k $key -p 4443
 
 %picoquic:script@client sudo=true delay=5
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
@@ -84,7 +83,6 @@ cd /home/tbarbette/workspace/wrk-quic/src
 DST=10.100.0.2
 sudo taskset -c 0-8 ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
 echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" | awk '{print $2}')
-
 
 
 
@@ -105,11 +103,11 @@ echo "RESULT-HANDSHAKES "$(sudo cat out | grep -ioE '[0-9]+' | awk '{s+=$1} END 
 %include npf.d/nginx.npf
 %nginx:import@server nginx
 %nginx:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:4443/bin-0K | tee out.txt | grep 'Requests' | awk '{print $2}')
+echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:4443/bin-$(FSIZE)K | tee out.txt | grep 'Requests' | awk '{print $2}')
 
 
 %h2o:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:8081/0index.html | tee out.txt | grep 'Requests' | awk '{print $2}')
+echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:8081/$(FSIZE)index.html | grep 'Requests' | awk '{print $2}')
 
 %h2o:script@server sudo=true
 sudo env PATH=$PATH taskset -c 2 h2o -c ${NPF_ROOT}h2o_conf.conf

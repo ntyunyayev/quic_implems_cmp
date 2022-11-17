@@ -22,10 +22,6 @@ sudo ethtool -L ens1f0 combined 1 && sudo systemctl stop irqbalance && sudo /usr
 //removing irqbalance, core 2 will handles every interrupt
 sudo ethtool -L ${self:0:ifname} combined 1 && sudo systemctl stop irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 2 ${self:0:ifname}
 
-%init@server
-//removing irqbalance, core 2 will handles every interrupt
-sudo ethtool -L ${self:0:ifname} combined 1 && sudo systemctl stop irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 2 ${self:0:ifname}
-
 
 //Not a good solution here
 //%pyexit
@@ -69,7 +65,6 @@ sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $NB_CORES dpdk_p
 
 //working
 %picoquic:script@client sudo=true delay=3
-echo client
 cd /home/nikita/workspace/dpdk_picoquic
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
 sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $NB_CORES dpdk_picoquicdemo --nodpdk -B 1000000000 -D -A 50:6b:4b:f3:7c:71 10.100.0.2 4443 /20000000000 | tee ~/out.pquic
