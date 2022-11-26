@@ -69,7 +69,7 @@ sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l
 export LD_LIBRARY_PATH=/home/tbarbette/workspace/dpdk-21.08/install/lib/x86_64-linux-gnu/:/usr/lib64/:$LD_LIBRARY_PATH
 cd /home/tbarbette/workspace/wrk-quic/src
 DST=10.100.0.2
-sudo taskset -c 0-$((CLIENT_THREADS + 1 )) ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
+sudo taskset -c 0-$((8)) ../wrk -a -R 0 --timeout $H -q -t 8 -c 128  https://$DST:4443/$FSIZE -L -U 2>&1 | tee ~/out.txt
 echo "RESULT-HANDSHAKES "$(sudo cat ~/out.txt | tail -n 3 | grep "Requests/sec" | awk '{print $2}')
 
 
@@ -109,7 +109,7 @@ echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128
 
 
 %h2o:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:8081/0index.html | tee out.txt | grep 'Requests' | awk '{print $2}')
+echo "RESULT-HANDSHAKES "$(../npf/build/wrk/wrk -H "Connection: Close" -t15 -c128 -d10s https://10.100.0.2:8081/0 | tee out.txt | grep 'Requests' | awk '{print $2}')
 
 %h2o:script@server sudo=true
 sudo env PATH=$PATH taskset -c 2 h2o -c ${NPF_ROOT}h2o_conf.conf

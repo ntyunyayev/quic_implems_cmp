@@ -1,0 +1,108 @@
+%info
+A test script to compare performance of QUIC stacks
+
+This file is intended to be run with NPF
+
+%variables
+
+TMP_FIZE=10000000000
+FSIZE={20000000000}
+SERVER=picoquic
+CLIENT=picoquic
+RP=10
+CLIENT_IRQ=8
+CLIENT_CPU=8
+CLIENT_THREADS=8
+SRV_IRQ=0
+SRV_CPU=1
+CLIENT_PARALLEL=128
+H=10
+AFF=2
+//PARRALEL=[1*64]
+//THREADS=[1*64]
+NB_SERVERS=[1*32]
+
+
+key=${NPF_ROOT}/server.key
+cert=${NPF_ROOT}/server.cert
+RUNTIME=10000
+
+%init@client sudo=true
+//enabling IRQ balance
+ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
+
+%init@server sudo=true
+//enabling IRQ balance
+
+%late_variables
+BASE_PORT=4443
+
+%config
+timeout=360
+n_runs=3
+
+
+%picoquic_dpdk:script@server sudo=true
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_SERVERS -a 0000:18:00.0 -- -T /dev/null -c $cert -k $key -p 4443 2>&1 | tee ~/logs.handshakes 
+
+%picoquic_dpdk:script@client sudo=true delay=8
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+NICS=""
+
+for i in $( eval echo {1..$NB_SERVERS} )
+do
+    TMP="-a 0000:18:00.0$(echo "1 + $i" | bc) "
+    NICS+=TMP
+done
+
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_SERVERS $NICS -- -N NB_SERVERS -X -D -A 50:6b:4b:f3:7c:70 10.100.0.2 4443 /FSIZE | tee ~/out.pquic_dpdk
+
+
+
+%picoquic:script@server sudo=true
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+for i in $( eval echo {1..$NB_SERVERS} ) 
+do
+    PORT=$( echo "$BASE_PORT + $i" | bc)
+    (sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $i dpdk_picoquicdemo --nodpdk -c $cert -k $key -B 1000000000 -p $PORT) &
+done
+wait
+
+
+%picoquic:script@client sudo=true delay=5
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+DST=10.100.0.2
+for i in $( eval echo {1..$NB_SERVERS} ) 
+do
+    PORT=$( echo "$BASE_PORT + $i" | bc)
+    (sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D -A 50:6b:4b:f3:7c:71 $DST $PORT /$FSIZE | tee ~/out$i.txt) &
+done
+START="$(date +%s.%3N)"
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$FSIZE * 8 * $NB_SERVERS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+
+
+%h2o:script@server sudo=true
+sudo mount -t tmpfs -o size=512M tmpfs $NPF_ROOTserver_folder/
+truncate -s $FSIZE ${NPF_ROOT}server_folder/$FSIZE
+sudo chrt -r 1 taskset -c 1-$NB_SERVERS /home/nikita/workspace/quic_implems_cmp/npf/build/h2o/build/h2o -c ${NPF_ROOT}h2o_conf.conf
+
+%h2o:script@client sudo=true delay=5
+res=$(echo $(sudo /home/nikita/workspace/quic_implems_cmp/npf/build/wrk/wrk -H "Connection: Close" -t15 -c128 -d10s https://10.100.0.2:8081/$FSIZE | grep 'Transfer' | awk '{print $2}'))
+value=${res%??}
+echo $res
+unit=$(echo $res | tail -c 2)
+TMP=0
+if [ "$unit" = "MB" ]; then
+    TMP=$(echo "$value * 8 /1000" | bc)
+else
+    TMP=$(echo "$value * 8" | bc)
+fi
+echo "RESULT-THROUGHPUT "$TMP

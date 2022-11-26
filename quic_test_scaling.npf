@@ -5,7 +5,7 @@ This file is intended to be run with NPF
 
 %variables
 
-FSIZE={10000}
+FSIZE={20000000000}
 SERVER=picoquic
 CLIENT=picoquic
 RP=10
@@ -19,7 +19,7 @@ H=10
 AFF=2
 //PARRALEL=[1*64]
 //THREADS=[1*64]
-NB_SERVERS={1,2,4,8}
+NB_CLIENTS={1,2,3,4}
 NB_CLIENT_THREADS=250
 
 
@@ -29,31 +29,40 @@ RUNTIME=10000
 
 %init@client sudo=true
 //enabling IRQ balance
+sudo arp -s  10.100.0.2 50:6b:4b:f3:7c:70
 ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
 
 %init@server sudo=true
 //enabling IRQ balance
+ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
 
 %late_variables
 BASE_PORT=4443
 
 %config
-timeout=60
-n_runs=1
+timeout=360
+n_runs=3
 
 
 %picoquic_dpdk:script@server sudo=true
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
-sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_SERVERS -a 0000:18:00.0 -- -T /dev/null -c $cert -k $key -p 4443 2>&1 | tee ~/logs.handshakes 
+sudo env PATH=$PATH  LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-1 -a 0000:18:00.0 -- -G cubic -T /dev/null -* 64 -@ 64 -c $cert -k $key -p 4443 2>&1 | tee ~/logs.handshakes 
 
 %picoquic_dpdk:script@client sudo=true delay=5
-cd /home/tbarbette/workspace/wrk-quic/src
-DST=10.100.0.2
-sudo ../wrk -a -R 0 --timeout $H -q -t 15 -c $NB_CLIENT_THREADS  https://$DST:$BASE_PORT/$FSIZE -L -U 2>&1 | tee ~/out.txt
-echo "RESULT-HANDSHAKES "$(cat ~/out.txt | grep 'Requests' | awk '{print $2}')
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
 
-
+for i in $( eval echo {1..$NB_CLIENTS} )
+do
+    (sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D 10.100.0.2 4443 /$FSIZE) &
+done
+START="$(date +%s.%3N)"
+wait
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$FSIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
 %picoquic:script@server sudo=true
+
 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
 for i in $( eval echo {1..$NB_SERVERS} ) 
@@ -63,43 +72,58 @@ do
 done
 wait
 
-
-%picoquic:script@client sudo=true delay=2
-for i in $( eval echo {0..$(echo "$NB_SERVERS - 1 " | bc)} )
-do
-    sudo ip netns delete nsCLIENT$i
-done
-sleep 5
-cd /home/tbarbette/workspace/wrk-quic/src
-sudo echo 8 | sudo tee /sys/bus/pci/devices/0000:18:00.0/sriov_numvfs
-for i in $( eval echo {0..$(echo "$NB_SERVERS - 1 " | bc)} ) 
-do  
-    sudo ifconfig ens1f0v$i up
-    sudo ifconfig ens1f0v$i 10.100.0.$i netmask 255.255.255.0
-    sudo ip netns add nsCLIENT$i
-    sudo ip link set ens1f0v$i netns nsCLIENT$i
-done
-DST=10.100.0.2
-for i in $( eval echo {1..$NB_SERVERS} ) 
+%picoquic:script@client sudo=true delay=5
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
+START="$(date +%s.%3N)"
+for i in $( eval echo {1..$NB_CLIENTS} )
 do
     PORT=$( echo "$BASE_PORT + $i" | bc)
-    (sudo ../wrk -a -R 0 --timeout $H -q -t 15 -c $NB_CLIENT_THREADS  https://$DST:$PORT/$FSIZE -L -U 2>&1 | tee ~/out$i.txt) &
+    (sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D 10.100.0.2 $PORT /$FSIZE) &
 done
 wait
-tot=0
-for i in $( eval echo {1..$NB_SERVERS} ) 
-do
-    tot=$(echo "$(cat ~/out$i.txt | grep 'Requests' | awk '{print $2}') + $tot" | bc)
-done
-echo "RESULT-HANDSHAKES "$tot
+END="$(date +%s.%3N)"
+ELAPSED=$(echo "scale=3; $END - $START" | bc)
+RES=$(echo "$FSIZE * 8 * $NB_CLIENTS / 1000000000" | bc -l)
+echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
+
+
+//%picoquic:script@client sudo=true delay=2
+//echo $(pwd)
+//for i in $( eval echo {0..$(echo "$NB_SERVERS - 1 " | bc)} )
+//do
+//    sudo ip netns delete nsCLIENT$i
+//done
+//sleep 5
+//cd /home/tbarbette/workspace/wrk-quic/src
+//sudo echo 8 | sudo tee /sys/bus/pci/devices/0000:18:00.0/sriov_numvfs
+//for i in $( eval echo {0..$(echo "$NB_SERVERS - 1 " | bc)} ) 
+//do  
+//    sudo ifconfig ens1f0v$i up
+//    sudo ifconfig ens1f0v$i 10.100.0.$i netmask 255.255.255.0
+//    sudo ip netns add nsCLIENT$i
+//    sudo ip link set ens1f0v$i netns nsCLIENT$i
+//done
+//DST=10.100.0.2
+//for i in $( eval echo {1..$NB_SERVERS} ) 
+//do
+//    PORT=$( echo "$BASE_PORT + $i" | bc)
+//    (sudo ../wrk -a -R 0 --timeout $H -q -t 15 -c $NB_CLIENT_THREADS  https://$DST:$PORT/$FSIZE -L -U 2>&1 | tee ~/out$i.txt) &
+//done
+//wait
+//tot=0
+//for i in $( eval echo {1..$NB_SERVERS} ) 
+//do
+//    tot=$(echo "$(cat ~/out$i.txt | grep 'Requests' | awk '{print $2}') + $tot" | bc)
+//done
+//echo "RESULT-HANDSHAKES "$tot
 
 
 
 %h2o:script@server sudo=true
 sudo mount -t tmpfs -o size=512M tmpfs $NPF_ROOTserver_folder/
-truncate -s $FSIZE ${NPF_ROOT}server_folder/$FSIZE
+sudo truncate -s $FSIZE ${NPF_ROOT}server_folder/$FSIZE
 MAX_CORES=$(echo "$NB_SERVERS + 7" | bc)
-/home/nikita/workspace/quic_implems_cmp/npf/build/h2o/build/h2o -c ${NPF_ROOT}h2o_conf.conf
+sudo chrt -r 1 taskset -c 1-$NB_SERVERS /home/nikita/workspace/quic_implems_cmp/npf/build/h2o/build/h2o -c ${NPF_ROOT}h2o_conf.conf
 
 %h2o:script@client sudo=true delay=5
-echo "RESULT-HANDSHAKES "$(sudo /home/nikita/workspace/quic_implems_cmp/npf/build/wrk/wrk -t15 -c128 -d10s https://10.100.0.2:8081/10000 | grep 'Requests' | awk '{print $2}')
+echo "RESULT-HANDSHAKES "$(sudo /home/nikita/workspace/quic_implems_cmp/npf/build/wrk/wrk -H "Connection: Close" -t8 -c128 -d10s https://10.100.0.2:8081/$FSIZE | grep 'Requests' | awk '{print $2}')
