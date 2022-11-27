@@ -5,7 +5,8 @@ This file is intended to be run with NPF
 
 %variables
 NB_CLIENTS=[1*8]
-CORES_USED={2,4}
+CORES_USED={2:1_core_pipeline}
+CONGESTION={-G bbr:BBR}
 
 %late_variables
 key=  ${NPF_ROOT}/server.key
@@ -18,10 +19,12 @@ timeout=600
 n_runs=3
 
 %init@client
-//enabling IRQ balance 
-echo 8 | sudo tee /sys/bus/pci/devices/0000\:18\:00.0/sriov_numvfs
-sudo ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
+//enabling IRQ balance
 
+sudo ethtool -L ens1f0 combined 32 && sudo systemctl start irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 0-31 ens1f0
+//sr_iov setup
+echo 0 | sudo tee /sys/bus/pci/devices/0000:18:00.0/sriov_numvfs
+echo 8 | sudo tee /sys/bus/pci/devices/0000:18:00.0/sriov_numvfs
 %init@server
 //removing irqbalance, core 2 will handles every interrupt
 sudo ethtool -L ens1f0 combined 1 && sudo systemctl stop irqbalance && sudo /usr/sbin/set_irq_affinity_cpulist.sh 2 ens1f0
@@ -89,19 +92,14 @@ ELAPSED=$(echo "scale=3; $END - $START" | bc)
 RES=$(echo "$DOWNLOAD_SIZE * 8 /1000000000 / $NB_CLIENTS" | BC -l)
 echo "RESULT-GOODPUT "$RES
 
-//--------------
+//--------------/home/nikita/workspace/quic_implems_cmp/compare/quic_test_multiple_connections_picoquic_picoquic_dpdk_picoquic-GOODPUT.pdf/home/nikita/workspace/quic_implems_cmp/compare/quic_test_multiple_connections_picoquic_picoquic_dpdk_picoquic-GOODPUT.pdf
 // picoquic
 //--------------
 
 %picoquic:script@server sudo=true
 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
-for i in $( eval echo {1..$NB_SERVERS} ) 
-do
-    PORT=$( echo "$BASE_PORT + $i" | bc)
-    (sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $i dpdk_picoquicdemo --nodpdk -c $cert -k $key -B 1000000000 -p $PORT) &
-done
-wait
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH taskset -c $CORES_USED dpdk_picoquicdemo --nodpdk $CONGESTION -c $cert -k $key -B 1000000000 -p $BASE_PORT
 
 %picoquic:script@client sudo=true delay=3
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
@@ -109,7 +107,7 @@ START="$(date +%s.%3N)"
 for i in $( eval echo {1..$NB_CLIENTS} )
 do
 PORT=$( echo "$BASE_PORT + $i" | bc)
-(sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk -B 1000000000 -D 10.100.0.2 $PORT /$DOWNLOAD_SIZE) &
+(sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --nodpdk $CONGESTION -B 1000000000 -D 10.100.0.2 $BASE_PORT /$DOWNLOAD_SIZE) &
 done
 wait
 END="$(date +%s.%3N)"
@@ -125,12 +123,27 @@ echo "RESULT-GOODPUT "$(echo $RES / $ELAPSED | bc -l)
 //--------------
 
 %picoquic_dpdk:script@server sudo=true
-sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_SERVERS -a 0000:18:00.0 -- -c $cert -k $key -p 4443
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-1 -a 0000:18:00.0 -- $CONGESTION -c $cert -k $key -p 4443
 
 %picoquic_dpdk:script@client sudo=true delay=3 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/nikita/dpdk_install_21.11/lib/x86_64-linux-gnu
-
-sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_CLIENTS -a 0000:18:00.0 -- -X -D -A 50:6b:4b:f3:7c:70 10.100.0.2 4443 /20000000000 | tee ~/out.pquic_dpdk
+NICS=""
+ID2=0
+ID=2
+for i in {1..$NB_CLIENTS}
+do
+   if [[ $ID -gt 7 ]]
+   then
+      ID=0
+      ID2=$(echo "${ID2} + 1" | bc)
+   fi
+   TMP="-a 0000:18:0$(echo $ID2).$ID "
+   NICS+=$TMP
+   ID=$(echo "${ID} + 1" | bc)
+   echo $ID
+done
+echo $NICS
+sudo env PATH=$PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH dpdk_picoquicdemo --dpdk -l 0-$NB_CLIENTS $NICS -- $CONGESTION -X -D -A 50:6b:4b:f3:7c:70 10.100.0.2 4443 /$DOWNLOAD_SIZE | tee ~/out.pquic_dpdk
 echo "RESULT-GOODPUT "$(cat ~/out.pquic_dpdk | grep -ioE '[0-9.]+ mbps' | awk '{print $1 /1000}' |bc)
 
 
